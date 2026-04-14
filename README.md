@@ -15,7 +15,7 @@ viam-server (Qualcomm Linux SoC)
             └── GPIO / PWM / ADC headers
 ```
 
-The module opens the UART directly after stopping the `arduino-router` service, which normally owns that port. A GPIO wake signal (gpiochip1 pin 37) is pulsed before opening the port to bring the STM32 into a ready state.
+The module communicates directly over `/dev/ttyHS1` after `setup.sh` stops the `arduino-router` service (which otherwise owns that port). The STM32 wake signal (GPIO 37) is pulsed once by `setup.sh` during first-run setup — not by the module on each connection.
 
 ## Models
 

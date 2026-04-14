@@ -22,7 +22,17 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FIRMWARE="$SCRIPT_DIR/firmware/uno-q-firmware/uno-q-firmware.ino"
-FQBN="arduino:zephyr:arduino_uno_q_stm32u585xx"
+
+# Detect the correct FQBN using arduino-cli rather than hardcoding it.
+# Board IDs vary by platform version; querying the CLI is authoritative.
+detect_fqbn() {
+    "$ARDUINO_CLI" board listall 2>/dev/null \
+        | grep -i "Uno Q\|uno.*q" \
+        | awk '{print $NF}' \
+        | grep "arduino:zephyr" \
+        | head -1
+}
+FQBN=""
 ARDUINO_CLI_INSTALL_DIR="/usr/local/bin"
 ARDUINO_CLI="$ARDUINO_CLI_INSTALL_DIR/arduino-cli"
 
@@ -91,6 +101,16 @@ fi
 # It must be running during this step.
 # ---------------------------------------------------------------------------
 if [ -n "$ARDUINO_CLI" ] && [ -f "$FIRMWARE" ]; then
+    FQBN=$(detect_fqbn)
+    if [ -z "$FQBN" ]; then
+        log "WARNING: Could not detect Arduino Uno Q FQBN from installed platform."
+        log "  Flash $FIRMWARE manually via Arduino IDE."
+    else
+        log "Detected FQBN: $FQBN"
+    fi
+fi
+
+if [ -n "$ARDUINO_CLI" ] && [ -f "$FIRMWARE" ] && [ -n "$FQBN" ]; then
     log "Ensuring arduino-router is running for JTAG access..."
     systemctl start arduino-router 2>/dev/null || true
     sleep 3  # allow router to initialize

@@ -126,6 +126,12 @@ func (b *arduinoUnoQ) hello(ctx context.Context) error {
 			if resp != want {
 				return fmt.Errorf("firmware version mismatch: got %q, want %q", resp, want)
 			}
+			// Drain any stale bytes (e.g. the STM32 boot message may have
+			// arrived before our HELLO, leaving an extra response in the
+			// buffer that would shift subsequent commands out of sync).
+			if sc, ok := b.serial.(*serialConn); ok {
+				sc.drain()
+			}
 			return nil
 		}
 

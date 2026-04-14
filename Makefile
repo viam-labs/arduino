@@ -27,7 +27,7 @@ ifneq ($(VIAM_TARGET_OS), windows)
 	strip $(MODULE_BINARY)
 endif
 	chmod +x setup.sh
-	tar czf $@ meta.json setup.sh firmware/ $(MODULE_BINARY)
+	tar czf $@ meta.json setup.sh firmware/uno-q-firmware/ $(MODULE_BINARY)
 
 module: test module.tar.gz
 

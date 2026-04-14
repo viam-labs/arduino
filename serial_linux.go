@@ -4,22 +4,15 @@ package arduino
 
 import (
 	"fmt"
-	"os"
-	"os/exec"
 	"syscall"
-	"time"
 
 	"golang.org/x/sys/unix"
 )
 
-// linuxRawPort implements rawReadWriter using direct syscall.Read/Write,
-// bypassing Go's internal epoll scheduler (os.File). The Qualcomm MSM UART
-// reports itself as "always readable" in poll(), causing epoll to immediately
-// unpark goroutines — then syscall.Read blocks forever. syscall.Read with
-// O_NONBLOCK always returns EAGAIN immediately when no data is available,
-// making the goroutine+select pattern in readLine work correctly.
+// linuxRawPort implements rawReadWriter via direct syscall.Read/Write on a
+// raw fd. os.File is avoided because os.File.Fd() calls SetBlocking(), which
+// removes O_NONBLOCK — causing reads to block forever on the MSM UART.
 type linuxRawPort struct {
-	f  *os.File
 	fd int
 }
 
@@ -32,70 +25,83 @@ func (p *linuxRawPort) readChunk(buf []byte) (int, error) {
 }
 
 func (p *linuxRawPort) write(b []byte) (int, error) {
-	return syscall.Write(p.fd, b)
+	n, err := syscall.Write(p.fd, b)
+	if n < 0 {
+		n = 0
+	}
+	return n, err
 }
 
 func (p *linuxRawPort) closeRW() error {
-	return p.f.Close()
+	return syscall.Close(p.fd)
 }
 
-// openSerialLinux opens the UART with O_NONBLOCK kept permanently set.
+// openSerialLinux opens the UART with VTIME-based read timeouts.
+// O_NONBLOCK is cleared after open because it suppresses VTIME on Linux tty
+// devices and the MSM UART driver does not return EAGAIN anyway.
+// GPIO 37 is not pulsed here; setup.sh handles the one-time STM32 wake signal.
 func openSerialLinux(path string, baud int) (*serialConn, error) {
-	// Pulse GPIO 37 on gpiochip1 to wake the STM32 coprocessor.
-	// Mirrors arduino-router's ExecStartPre:
-	//   ExecStartPre=-/usr/bin/gpioset -c /dev/gpiochip1 -t0 37=0
-	_ = exec.Command("gpioset", "-c", "/dev/gpiochip1", "-t0", "37=0").Run()
-	time.Sleep(500 * time.Millisecond)
-
-	f, err := os.OpenFile(path, os.O_RDWR|syscall.O_NOCTTY|syscall.O_NONBLOCK, 0)
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_NOCTTY|syscall.O_NDELAY, 0)
 	if err != nil {
 		return nil, fmt.Errorf("opening %s: %w", path, err)
 	}
 
-	fd := int(f.Fd())
+	if err := clearNonblock(fd); err != nil {
+		syscall.Close(fd)
+		return nil, fmt.Errorf("clearing O_NONBLOCK on %s: %w", path, err)
+	}
+
 	if err := configureTermios(fd, baud); err != nil {
-		f.Close()
+		syscall.Close(fd)
 		return nil, fmt.Errorf("configuring termios on %s: %w", path, err)
 	}
 
-	return &serialConn{rw: &linuxRawPort{f: f, fd: fd}}, nil
+	return newSerialConn(&linuxRawPort{fd: fd}), nil
 }
 
-// configureTermios reads the current termios settings and modifies them
-// for 8N1 raw mode at the given baud rate, then applies them.
-// Reading first (TCGETS before TCSETS) avoids corrupting driver state.
+// clearNonblock clears O_NONBLOCK on fd so VTIME takes effect for reads.
+func clearNonblock(fd int) error {
+	flags, _, errno := syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), syscall.F_GETFL, 0)
+	if errno != 0 {
+		return errno
+	}
+	_, _, errno = syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), syscall.F_SETFL,
+		flags&^uintptr(syscall.O_NONBLOCK))
+	if errno != 0 {
+		return errno
+	}
+	return nil
+}
+
+// configureTermios sets 8N1 raw mode at the given baud rate.
+// VMIN=0, VTIME=2 causes read() to return after 200 ms if no bytes arrive,
+// allowing the readLoop goroutine to check context cancellation periodically.
 func configureTermios(fd int, baud int) error {
 	baudConst, err := linuxBaudConst(baud)
 	if err != nil {
 		return err
 	}
 
-	// Start from current settings rather than a zeroed struct — some UART
-	// drivers require certain fields to be preserved.
 	t, err := unix.IoctlGetTermios(fd, unix.TCGETS)
 	if err != nil {
 		return fmt.Errorf("TCGETS: %w", err)
 	}
 
-	// Raw input: disable canonical mode, echo, signals, extended processing.
 	t.Iflag &^= unix.IGNBRK | unix.BRKINT | unix.PARMRK | unix.ISTRIP |
 		unix.INLCR | unix.IGNCR | unix.ICRNL | unix.IXON
 	t.Oflag &^= unix.OPOST
 	t.Lflag &^= unix.ECHO | unix.ECHONL | unix.ICANON | unix.ISIG | unix.IEXTEN
 
-	// 8 data bits, no parity, enable receiver, ignore modem control lines.
 	t.Cflag &^= unix.CSIZE | unix.PARENB
 	t.Cflag |= unix.CS8 | unix.CREAD | unix.CLOCAL
 
-	// Set baud rate: clear CBAUD bits then set new value, also set Ispeed/Ospeed.
 	t.Cflag &^= unix.CBAUD
 	t.Cflag |= baudConst
 	t.Ispeed = baudConst
 	t.Ospeed = baudConst
 
-	// VMIN=0, VTIME=0: with O_NONBLOCK, return whatever bytes are available.
 	t.Cc[unix.VMIN] = 0
-	t.Cc[unix.VTIME] = 0
+	t.Cc[unix.VTIME] = 2
 
 	return unix.IoctlSetTermios(fd, unix.TCSETS, t)
 }

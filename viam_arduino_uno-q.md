@@ -13,7 +13,7 @@ viam-server (Qualcomm Linux)
             └── GPIO / PWM / ADC headers
 ```
 
-On startup the module pulses **GPIO 37** on `gpiochip1` to wake the STM32, then opens `/dev/ttyHS1` and performs a `HELLO` handshake to confirm firmware version.
+On startup the module opens `/dev/ttyHS1` and performs a `HELLO` handshake to confirm firmware version. The STM32 wake signal (GPIO 37) is pulsed once by `setup.sh` during first-run — not on each module start. A **board reset is required** after first-run completes before the module can connect.
 
 ## Requirements
 
