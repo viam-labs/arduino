@@ -2,13 +2,12 @@ package arduino
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"runtime"
-	"strings"
+	"io"
 	"sync"
+	"syscall"
 	"time"
-
-	goserial "go.bug.st/serial"
 )
 
 // sender is the interface for sending commands to the STM32.
@@ -18,40 +17,27 @@ type sender interface {
 	close() error
 }
 
+// rawReadWriter abstracts the platform-specific read/write path.
+// On Linux this is backed by an O_NONBLOCK file descriptor via syscall.Read.
+type rawReadWriter interface {
+	readChunk(buf []byte) (int, error)
+	write(b []byte) (int, error)
+	closeRW() error
+}
+
 // serialConn is the real UART implementation of sender.
-//
-// bufio.Reader is intentionally NOT used here. go.bug.st/serial returns (0, nil)
-// when a read timeout fires on macOS (serial_unix.go:93 uses select(); on timeout
-// it returns zero bytes with no error). bufio.Reader.fill() treats (0, nil) as
-// "keep trying" and loops up to 100 times before raising io.ErrNoProgress
-// ("multiple Read calls return no data or error"). readLine avoids this by
-// polling byte-by-byte and explicitly handling the (0, nil) case.
 type serialConn struct {
-	mu   sync.Mutex
-	port goserial.Port
+	mu sync.Mutex
+	rw rawReadWriter
 }
 
 // openSerial opens the UART port at the given path and baud rate.
-//
-// On macOS, USB serial devices must be opened via the /dev/cu.* path, not
-// /dev/tty.*. The tty.* variant uses carrier-detect (DCD) semantics: because
-// Arduino boards never assert DCD, reads stall indefinitely. openSerial
-// silently rewrites /dev/tty. → /dev/cu. on darwin so a user-supplied tty.*
-// path works without requiring manual correction.
+// Implemented in serial_linux.go for Linux; returns an error on other platforms.
 func openSerial(path string, baud int) (*serialConn, error) {
-	if runtime.GOOS == "darwin" {
-		path = strings.Replace(path, "/dev/tty.", "/dev/cu.", 1)
+	if baud == 0 {
+		baud = 115200
 	}
-	port, err := goserial.Open(path, &goserial.Mode{
-		BaudRate: baud,
-		DataBits: 8,
-		Parity:   goserial.NoParity,
-		StopBits: goserial.OneStopBit,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("opening %s at %d baud: %w", path, baud, err)
-	}
-	return &serialConn{port: port}, nil
+	return openSerialLinux(path, baud)
 }
 
 // send writes cmd\n to the port and reads back one response line.
@@ -59,55 +45,80 @@ func (s *serialConn) send(ctx context.Context, cmd string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, err := fmt.Fprintf(s.port, "%s\n", cmd); err != nil {
+	if _, err := s.rw.write([]byte(cmd + "\n")); err != nil {
 		return "", fmt.Errorf("write %q: %w", cmd, err)
 	}
 	return s.readLine(ctx)
 }
 
-// serialPollInterval is the per-read timeout used inside readLine.
-// Short enough to check ctx.Err() frequently; long enough not to spin.
-const serialPollInterval = 50 * time.Millisecond
-
-// readLine reads from the port one byte at a time until it finds '\n',
-// then returns the trimmed line. It polls at serialPollInterval so that
-// the caller's context deadline is respected even when no data arrives.
+// readLine reads from the port until '\n', returning the trimmed line.
+// The read runs in a goroutine so ctx cancellation is always honoured even
+// when the underlying syscall.Read blocks in a kernel call.
 //
-// go.bug.st/serial returns (0, nil) on a read timeout (no error, no bytes).
-// We treat that as "no data yet" and loop, checking ctx.Err() each iteration.
-// On timeout, the error includes how many bytes were received so far, which
-// helps distinguish "no response at all" from "partial/truncated response".
+// The goroutine exits when it finds '\n', receives a real error, or when the
+// port is closed (which causes the next read to return an error).
 func (s *serialConn) readLine(ctx context.Context) (string, error) {
-	if err := s.port.SetReadTimeout(serialPollInterval); err != nil {
-		return "", fmt.Errorf("set read timeout: %w", err)
+	type result struct {
+		line string
+		err  error
 	}
-	buf := make([]byte, 1)
-	var line []byte
-	for {
-		if err := ctx.Err(); err != nil {
-			// Include any partial bytes so callers can tell "silence" from
-			// "truncated response" in error messages and logs.
-			if len(line) > 0 {
-				return "", fmt.Errorf("%w (partial %d bytes: %q)", err, len(line), string(line))
+	ch := make(chan result, 1)
+
+	go func() {
+		buf := make([]byte, 256)
+		var line []byte
+		for {
+			// Exit early if the context is already done so we don't spin
+			// after the outer select has returned via ctx.Done().
+			if ctx.Err() != nil {
+				return
 			}
-			return "", fmt.Errorf("%w (0 bytes received)", err)
+			n, err := s.rw.readChunk(buf)
+			if err != nil {
+				switch {
+				case errors.Is(err, syscall.EAGAIN), errors.Is(err, syscall.EWOULDBLOCK):
+					// O_NONBLOCK: no data yet — yield briefly and retry.
+					time.Sleep(5 * time.Millisecond)
+					continue
+				case errors.Is(err, io.EOF):
+					// MSM UART driver returned 0 bytes without EAGAIN; Go
+					// converts read()=0 to io.EOF. Transient during STM32
+					// wake-up — treat as "no data yet" and retry.
+					time.Sleep(5 * time.Millisecond)
+					continue
+				default:
+					ch <- result{"", err}
+					return
+				}
+			}
+			for i := 0; i < n; i++ {
+				if buf[i] == '\n' {
+					// Arduino Serial.println sends CR+LF; TrimSpace strips \r.
+					ch <- result{trimLine(line), nil}
+					return
+				}
+				line = append(line, buf[i])
+			}
 		}
-		n, err := s.port.Read(buf)
-		if err != nil {
-			return "", fmt.Errorf("read: %w", err)
-		}
-		if n == 0 {
-			// (0, nil) — serial poll interval fired, no data yet; retry.
-			continue
-		}
-		if buf[0] == '\n' {
-			// Arduino's Serial.println sends CR+LF; TrimSpace handles the \r.
-			return strings.TrimSpace(string(line)), nil
-		}
-		line = append(line, buf[0])
+	}()
+
+	select {
+	case r := <-ch:
+		return r.line, r.err
+	case <-ctx.Done():
+		return "", ctx.Err()
 	}
 }
 
 func (s *serialConn) close() error {
-	return s.port.Close()
+	return s.rw.closeRW()
+}
+
+// trimLine strips trailing whitespace and carriage returns from a line buffer.
+func trimLine(b []byte) string {
+	s := string(b)
+	for len(s) > 0 && (s[len(s)-1] == '\r' || s[len(s)-1] == ' ' || s[len(s)-1] == '\t') {
+		s = s[:len(s)-1]
+	}
+	return s
 }

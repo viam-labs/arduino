@@ -107,8 +107,8 @@ func newBoardWithSender(ctx context.Context, name resource.Name, conf *Config, s
 
 func (b *arduinoUnoQ) hello(ctx context.Context) error {
 	const (
-		overallTimeout = 10 * time.Second
-		attemptTimeout = 1 * time.Second
+		overallTimeout = 30 * time.Second
+		attemptTimeout = 5 * time.Second
 		retryWait      = 500 * time.Millisecond
 		want           = "OK UNO-Q v1"
 	)

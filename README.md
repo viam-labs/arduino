@@ -2,7 +2,20 @@
 
 A [Viam modular component](https://docs.viam.com/registry/) that exposes the **Arduino Uno Q**'s GPIO, PWM, and analog I/O to a viam-server machine.
 
-The module runs on the Uno Q's Qualcomm Linux SoC and communicates with the onboard STM32U585 microcontroller over UART. It implements the [`rdk:component:board`](https://docs.viam.com/components/board/) API.
+The module runs on the Uno Q's **Qualcomm Linux SoC** and communicates with the onboard **STM32U585** coprocessor over the internal UART (`/dev/ttyHS1`). It implements the [`rdk:component:board`](https://docs.viam.com/components/board/) API.
+
+## Architecture
+
+```
+viam-server (Qualcomm Linux SoC)
+    └── viam:arduino module
+            │ UART /dev/ttyHS1 @ 115200 baud
+            ▼
+        STM32U585 (firmware/uno-q-firmware.ino)
+            └── GPIO / PWM / ADC headers
+```
+
+The module opens the UART directly after stopping the `arduino-router` service, which normally owns that port. A GPIO wake signal (gpiochip1 pin 37) is pulsed before opening the port to bring the STM32 into a ready state.
 
 ## Models
 
@@ -13,26 +26,49 @@ The module runs on the Uno Q's Qualcomm Linux SoC and communicates with the onbo
 ## Requirements
 
 - **Hardware:** Arduino Uno Q
-- **Firmware:** Flash `firmware/uno-q-firmware.ino` to the STM32 coprocessor using the Arduino IDE with Uno Q board support installed. The firmware must report version `UNO-Q v1` or the module will refuse to start.
-- **OS:** Linux arm64 (Qualcomm SoC) or macOS arm64 for local development
+- **Firmware:** Flash `firmware/uno-q-firmware.ino` to the STM32 via Arduino IDE with the `arduino:zephyr` platform installed. The firmware uses `Serial1` (D0/D1, the Qualcomm-facing UART) — not `Serial` (USB CDC).
+- **arduino-router service:** Must be stopped before the module starts, otherwise it holds `/dev/ttyHS1` exclusively.
 
-## Installation
+## Setup
 
-Add the module to your machine via the [Viam Registry](https://app.viam.com/registry):
+The `setup.sh` script runs automatically on first install (via Viam's `first_run` mechanism). It:
 
-1. Search for `viam:arduino` in the Viam Registry
-2. Click **Add to machine**
-3. Configure the component (see [model docs](viam_arduino_uno-q.md))
+1. **Flashes the STM32 firmware** via `arduino-cli` (if available on the board)
+2. **Stops and permanently disables `arduino-router`** so the module can own `/dev/ttyHS1` directly
 
-### Build from source
+If `arduino-cli` is not available, the firmware must be flashed manually:
+
+1. Install the `arduino:zephyr` platform in Arduino IDE via Boards Manager
+2. Select **Arduino Uno Q** as the target board  
+3. Open `firmware/uno-q-firmware.ino` and upload
+
+The firmware uses `Serial1` (D0/D1 — the Qualcomm-facing hardware UART) at 115200 baud, **not** `Serial` (USB CDC to the host).
+
+## Deployment
+
+The module binary must be compiled for Linux ARM64 and copied to the board:
 
 ```bash
-git clone https://github.com/viamrobotics/viam-arduino-uno-q
-cd viam-arduino-uno-q
-make module.tar.gz
+# Cross-compile on your Mac
+GOARCH=arm64 GOOS=linux go build -o viam-arduino-uno-q ./cmd/module/
+
+# Copy to the board
+scp viam-arduino-uno-q arduino@<board-ip>:/home/arduino/viam-arduino-uno-q
 ```
 
-The resulting `module.tar.gz` can be deployed to your machine as a local module.
+Configure as a local module in [app.viam.com](https://app.viam.com):
+
+```json
+{
+  "modules": [
+    {
+      "type": "local",
+      "name": "arduino",
+      "executable_path": "/home/arduino/viam-arduino-uno-q"
+    }
+  ]
+}
+```
 
 ## Development
 
@@ -40,14 +76,11 @@ The resulting `module.tar.gz` can be deployed to your machine as a local module.
 # Install dependencies
 make setup
 
-# Run unit tests (no hardware required)
+# Run unit tests (uses mock serial — no hardware required)
 go test -race ./...
 
-# Run hardware integration tests (Arduino Uno Q connected via USB)
-go test -tags hardware -v -serial /dev/ttyACM0 ./...
-
-# Build the module binary
-make
+# Cross-compile for the board
+GOARCH=arm64 GOOS=linux go build -o viam-arduino-uno-q ./cmd/module/
 ```
 
-See [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) for details on the module lifecycle and how to extend this module.
+See [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) for details on the module lifecycle.
