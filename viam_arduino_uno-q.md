@@ -32,7 +32,7 @@ sudo systemctl disable arduino-router
 # 2. Flash firmware via Arduino IDE
 #    - Install the arduino:zephyr platform in Boards Manager
 #    - Select "Arduino Uno Q" as the target board
-#    - Open firmware/uno-q-firmware.ino and upload
+#    - Open firmware/uno-q-firmware/uno-q-firmware.ino and upload
 #    NOTE: The router must be running during the flash (it provides JTAG access).
 #    Start it, flash, then stop it again.
 ```

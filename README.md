@@ -11,7 +11,7 @@ viam-server (Qualcomm Linux SoC)
     └── viam:arduino module
             │ UART /dev/ttyHS1 @ 115200 baud
             ▼
-        STM32U585 (firmware/uno-q-firmware.ino)
+        STM32U585 (firmware/uno-q-firmware/uno-q-firmware.ino)
             └── GPIO / PWM / ADC headers
 ```
 
@@ -26,7 +26,7 @@ The module opens the UART directly after stopping the `arduino-router` service, 
 ## Requirements
 
 - **Hardware:** Arduino Uno Q
-- **Firmware:** Flash `firmware/uno-q-firmware.ino` to the STM32 via Arduino IDE with the `arduino:zephyr` platform installed. The firmware uses `Serial1` (D0/D1, the Qualcomm-facing UART) — not `Serial` (USB CDC).
+- **Firmware:** Flash `firmware/uno-q-firmware/uno-q-firmware.ino` to the STM32 via Arduino IDE with the `arduino:zephyr` platform installed. The firmware uses `Serial1` (D0/D1, the Qualcomm-facing UART) — not `Serial` (USB CDC).
 - **arduino-router service:** Must be stopped before the module starts, otherwise it holds `/dev/ttyHS1` exclusively.
 
 ## Setup
@@ -40,7 +40,7 @@ If `arduino-cli` is not available, the firmware must be flashed manually:
 
 1. Install the `arduino:zephyr` platform in Arduino IDE via Boards Manager
 2. Select **Arduino Uno Q** as the target board  
-3. Open `firmware/uno-q-firmware.ino` and upload
+3. Open `firmware/uno-q-firmware/uno-q-firmware.ino` and upload
 
 The firmware uses `Serial1` (D0/D1 — the Qualcomm-facing hardware UART) at 115200 baud, **not** `Serial` (USB CDC to the host).
 

@@ -5,7 +5,7 @@
 # What this does:
 #   1. Downloads arduino-cli if not already installed.
 #   2. Installs the arduino:zephyr platform if not already installed.
-#   3. Flashes firmware/uno-q-firmware.ino to the STM32 coprocessor via
+#   3. Flashes firmware/uno-q-firmware/uno-q-firmware.ino to the STM32 coprocessor via
 #      arduino-cli (requires the arduino-router to be running for JTAG access).
 #   4. Stops and permanently disables arduino-router so the viam:arduino module
 #      can claim /dev/ttyHS1 exclusively.
@@ -21,7 +21,7 @@ if [ "$(uname -m)" != "aarch64" ] || [ "$(uname -s)" != "Linux" ]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-FIRMWARE="$SCRIPT_DIR/firmware/uno-q-firmware.ino"
+FIRMWARE="$SCRIPT_DIR/firmware/uno-q-firmware/uno-q-firmware.ino"
 FQBN="arduino:zephyr:arduino_uno_q_stm32u585xx"
 ARDUINO_CLI_INSTALL_DIR="/usr/local/bin"
 ARDUINO_CLI="$ARDUINO_CLI_INSTALL_DIR/arduino-cli"
@@ -59,7 +59,7 @@ install_arduino_cli() {
 if ! command -v arduino-cli &>/dev/null; then
     install_arduino_cli || {
         log "WARNING: Could not install arduino-cli automatically."
-        log "  Flash firmware/uno-q-firmware.ino manually via Arduino IDE"
+        log "  Flash firmware/uno-q-firmware/uno-q-firmware.ino manually via Arduino IDE"
         log "  with board: $FQBN"
         log "  Then re-run this script or restart viam-agent."
         # Still proceed to disable arduino-router below
@@ -74,7 +74,7 @@ ARDUINO_CLI=$(command -v arduino-cli 2>/dev/null || true)
 # Step 2: Install the arduino:zephyr platform if needed
 # ---------------------------------------------------------------------------
 if [ -n "$ARDUINO_CLI" ]; then
-    if ! "$ARDUINO_CLI" board listall 2>/dev/null | grep -q "arduino_uno_q"; then
+    if ! "$ARDUINO_CLI" core list 2>/dev/null | grep -q "arduino:zephyr"; then
         log "Installing arduino:zephyr board platform..."
         "$ARDUINO_CLI" core update-index 2>&1 || true
         "$ARDUINO_CLI" core install arduino:zephyr 2>&1 && \
@@ -102,11 +102,11 @@ if [ -n "$ARDUINO_CLI" ] && [ -f "$FIRMWARE" ]; then
             log "Firmware flashed successfully."
         else
             log "WARNING: Firmware upload failed."
-            log "  Flash firmware/uno-q-firmware.ino manually via Arduino IDE."
+            log "  Flash firmware/uno-q-firmware/uno-q-firmware.ino manually via Arduino IDE."
         fi
     else
         log "WARNING: Firmware compile failed."
-        log "  Flash firmware/uno-q-firmware.ino manually via Arduino IDE."
+        log "  Flash firmware/uno-q-firmware/uno-q-firmware.ino manually via Arduino IDE."
     fi
 elif [ ! -f "$FIRMWARE" ]; then
     log "WARNING: Firmware not found at $FIRMWARE — skipping flash."
