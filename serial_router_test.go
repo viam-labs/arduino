@@ -33,9 +33,7 @@ func TestReadLine_RoutesCommandResponse(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	conn.mu.Lock()
 	line, err := conn.readLine(ctx)
-	conn.mu.Unlock()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,6 +56,22 @@ func TestReadLoop_RoutesTick(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timeout waiting for TICK")
+	}
+}
+
+func TestDrain_ClearsTickRecv(t *testing.T) {
+	pipe := &fakePipe{data: make(chan []byte, 8)}
+	conn := newSerialConn(pipe)
+	defer conn.close()
+
+	pipe.data <- []byte("TICK 2 1 99999\r\n")
+	time.Sleep(50 * time.Millisecond) // let readLoop process
+	conn.drain()
+
+	select {
+	case <-conn.tickRecv:
+		t.Fatal("tickRecv should be empty after drain")
+	default:
 	}
 }
 
