@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -25,13 +26,14 @@ type rawReadWriter interface {
 }
 
 // serialConn is the real UART implementation of sender.
-// A single background goroutine (readLoop) owns the fd and streams bytes into
-// recv; readLine selects on recv and ctx.Done() for deadline-safe line reads.
+// A single background goroutine (readLoop) owns the fd and assembles complete
+// lines, routing TICK-prefixed lines to tickRecv and all other lines to cmdRecv.
 type serialConn struct {
-	mu   sync.Mutex
-	rw   rawReadWriter
-	recv chan byte
-	done chan struct{}
+	mu       sync.Mutex
+	rw       rawReadWriter
+	cmdRecv  chan string // OK / ERR lines — responses to commands
+	tickRecv chan string // TICK lines    — unsolicited interrupt events
+	done     chan struct{}
 }
 
 // openSerial opens the UART port at the given path and baud rate.
@@ -47,18 +49,21 @@ func openSerial(path string, baud int) (*serialConn, error) {
 // and returns a ready-to-use serialConn.
 func newSerialConn(rw rawReadWriter) *serialConn {
 	s := &serialConn{
-		rw:   rw,
-		recv: make(chan byte, 4096),
-		done: make(chan struct{}),
+		rw:       rw,
+		cmdRecv:  make(chan string, 64),
+		tickRecv: make(chan string, 256),
+		done:     make(chan struct{}),
 	}
 	go s.readLoop()
 	return s
 }
 
 // readLoop is the single goroutine that reads from the fd for the lifetime of
-// this serialConn. It exits when done is closed or the fd is closed (EBADF).
+// this serialConn. It assembles complete lines, strips \r inline, and routes
+// TICK-prefixed lines to tickRecv and everything else to cmdRecv.
 func (s *serialConn) readLoop() {
 	buf := make([]byte, 256)
+	var line []byte
 	for {
 		select {
 		case <-s.done:
@@ -83,12 +88,34 @@ func (s *serialConn) readLoop() {
 		}
 
 		for i := 0; i < n; i++ {
-			select {
-			case s.recv <- buf[i]:
-			case <-s.done:
-				return
+			b := buf[i]
+			if b == '\r' {
+				continue
 			}
+			if b == '\n' {
+				s.routeLine(string(line))
+				line = line[:0]
+				continue
+			}
+			line = append(line, b)
 		}
+	}
+}
+
+// routeLine sends a complete line to the appropriate channel.
+func (s *serialConn) routeLine(line string) {
+	if line == "" {
+		return
+	}
+	var ch chan string
+	if strings.HasPrefix(line, "TICK ") {
+		ch = s.tickRecv
+	} else {
+		ch = s.cmdRecv
+	}
+	select {
+	case ch <- line:
+	case <-s.done:
 	}
 }
 
@@ -104,34 +131,24 @@ func (s *serialConn) send(ctx context.Context, cmd string) (string, error) {
 	return s.readLine(ctx)
 }
 
-// readLine assembles bytes from recv until '\n', returning the trimmed line.
+// readLine reads the next command response line from cmdRecv.
 // ctx cancellation is honoured immediately via select.
 func (s *serialConn) readLine(ctx context.Context) (string, error) {
-	var line []byte
-	for {
-		select {
-		case <-ctx.Done():
-			if len(line) > 0 {
-				return "", fmt.Errorf("%w (partial %d bytes: %q)",
-					ctx.Err(), len(line), string(line))
-			}
-			return "", fmt.Errorf("%w (0 bytes received)", ctx.Err())
-		case b := <-s.recv:
-			if b == '\n' {
-				// Arduino Serial.println sends CR+LF; trimLine strips \r.
-				return trimLine(line), nil
-			}
-			line = append(line, b)
-		}
+	select {
+	case <-ctx.Done():
+		return "", fmt.Errorf("%w (0 bytes received)", ctx.Err())
+	case line := <-s.cmdRecv:
+		return line, nil
 	}
 }
 
-// drain discards buffered bytes in recv after a successful HELLO, preventing
-// the STM32 boot message from shifting subsequent command/response pairs.
+// drain discards buffered lines in both cmdRecv and tickRecv, preventing
+// stale data from shifting subsequent command/response pairs.
 func (s *serialConn) drain() {
 	for {
 		select {
-		case <-s.recv:
+		case <-s.cmdRecv:
+		case <-s.tickRecv:
 		default:
 			return
 		}
@@ -146,13 +163,4 @@ func (s *serialConn) close() error {
 		close(s.done)
 	}
 	return s.rw.closeRW()
-}
-
-// trimLine strips trailing carriage returns and whitespace from a line buffer.
-func trimLine(b []byte) string {
-	s := string(b)
-	for len(s) > 0 && (s[len(s)-1] == '\r' || s[len(s)-1] == ' ' || s[len(s)-1] == '\t') {
-		s = s[:len(s)-1]
-	}
-	return s
 }
