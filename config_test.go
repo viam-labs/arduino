@@ -4,6 +4,32 @@ import (
 	"testing"
 )
 
+func TestConfigValidate_DigitalInterrupts(t *testing.T) {
+	cfg := &Config{
+		SerialPath: "/dev/ttyHS1",
+		DigitalInterrupts: []InterruptConfig{
+			{Name: "enc-a", Pin: "2", Mode: "CHANGE"},
+		},
+	}
+	_, _, err := cfg.Validate("test")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestConfigValidate_InterruptModeDefault(t *testing.T) {
+	cfg := &Config{
+		SerialPath: "/dev/ttyHS1",
+		DigitalInterrupts: []InterruptConfig{
+			{Name: "btn", Pin: "3"}, // no Mode
+		},
+	}
+	cfg.Validate("test") //nolint:errcheck
+	if cfg.DigitalInterrupts[0].Mode != "CHANGE" {
+		t.Fatalf("expected default mode CHANGE, got %q", cfg.DigitalInterrupts[0].Mode)
+	}
+}
+
 func TestConfigValidate(t *testing.T) {
 	t.Run("missing serial_path returns error", func(t *testing.T) {
 		cfg := &Config{}

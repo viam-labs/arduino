@@ -28,11 +28,19 @@ type AnalogConfig struct {
 	Pin  string `json:"pin"` // "0" through "5" for A0–A5
 }
 
+// InterruptConfig configures a single digital interrupt.
+type InterruptConfig struct {
+	Name string `json:"name"`
+	Pin  string `json:"pin"`
+	Mode string `json:"mode,omitempty"` // "RISING", "FALLING", or "CHANGE" (default)
+}
+
 // Config holds the configuration for the Arduino Uno Q board component.
 type Config struct {
-	SerialPath    string         `json:"serial_path"`
-	BaudRate      int            `json:"baud_rate,omitempty"`
-	AnalogReaders []AnalogConfig `json:"analogs,omitempty"`
+	SerialPath        string            `json:"serial_path"`
+	BaudRate          int               `json:"baud_rate,omitempty"`
+	AnalogReaders     []AnalogConfig    `json:"analogs,omitempty"`
+	DigitalInterrupts []InterruptConfig `json:"digital_interrupts,omitempty"`
 }
 
 // Validate ensures all parts of the config are valid and important fields exist.
@@ -42,6 +50,11 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	}
 	if cfg.BaudRate == 0 {
 		cfg.BaudRate = 115200
+	}
+	for i := range cfg.DigitalInterrupts {
+		if cfg.DigitalInterrupts[i].Mode == "" {
+			cfg.DigitalInterrupts[i].Mode = "CHANGE"
+		}
 	}
 	return nil, nil, nil
 }
