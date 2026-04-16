@@ -62,10 +62,14 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 type arduinoUnoQ struct {
 	name resource.Name
 
-	mu      sync.Mutex
-	serial  sender
-	gpios   map[string]*gpioPin
-	analogs map[string]*analogPin
+	mu         sync.Mutex
+	serial     sender
+	gpios      map[string]*gpioPin
+	analogs    map[string]*analogPin
+	interrupts map[string]*digitalInterrupt // keyed by logical name
+
+	tickSubsMu sync.Mutex
+	tickSubs   []chan board.Tick // active StreamTicks subscribers
 
 	logger logging.Logger
 	cfg    *Config
@@ -102,6 +106,7 @@ func newBoardWithSender(ctx context.Context, name resource.Name, conf *Config, s
 		serial:     s,
 		gpios:      map[string]*gpioPin{},
 		analogs:    map[string]*analogPin{},
+		interrupts: map[string]*digitalInterrupt{},
 		logger:     logger,
 		cfg:        conf,
 		cancelCtx:  cancelCtx,
@@ -115,6 +120,12 @@ func newBoardWithSender(ctx context.Context, name resource.Name, conf *Config, s
 	for _, ar := range conf.AnalogReaders {
 		b.analogs[ar.Name] = &analogPin{channel: ar.Pin, serial: b.serial}
 	}
+	if err := b.configureInterrupts(conf.DigitalInterrupts); err != nil {
+		s.close()
+		cancelFunc()
+		return nil, err
+	}
+	go b.tickDispatcher(s)
 	return b, nil
 }
 
@@ -178,12 +189,20 @@ func (b *arduinoUnoQ) Reconfigure(ctx context.Context, _ resource.Dependencies, 
 func (b *arduinoUnoQ) reconfigureWithSender(ctx context.Context, conf *Config, s sender) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
+	// Stop the existing tickDispatcher before draining/hello.
+	b.cancelFunc()
+	cancelCtx, cancelFunc := context.WithCancel(context.Background())
+	b.cancelCtx = cancelCtx
+	b.cancelFunc = cancelFunc
+
 	if err := b.serial.close(); err != nil {
 		b.logger.Warnw("closing serial port during reconfigure", "err", err)
 	}
 	b.serial = s
 	b.gpios = map[string]*gpioPin{}
 	b.analogs = map[string]*analogPin{}
+	b.interrupts = map[string]*digitalInterrupt{}
 	b.cfg = conf
 	if err := b.hello(ctx); err != nil {
 		return err
@@ -191,6 +210,10 @@ func (b *arduinoUnoQ) reconfigureWithSender(ctx context.Context, conf *Config, s
 	for _, ar := range conf.AnalogReaders {
 		b.analogs[ar.Name] = &analogPin{channel: ar.Pin, serial: b.serial}
 	}
+	if err := b.configureInterrupts(conf.DigitalInterrupts); err != nil {
+		return err
+	}
+	go b.tickDispatcher(s)
 	return nil
 }
 
@@ -209,9 +232,96 @@ func (b *arduinoUnoQ) AnalogByName(name string) (board.Analog, error) {
 	return a, nil
 }
 
-// DigitalInterruptByName is not supported in v1.
+// configureInterrupts sends an "INT <pin> <mode>" command for each configured
+// interrupt and stores a digitalInterrupt keyed by logical name.
+func (b *arduinoUnoQ) configureInterrupts(cfgs []InterruptConfig) error {
+	for _, ic := range cfgs {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_, err := b.serial.send(ctx, fmt.Sprintf("INT %s %s", ic.Pin, ic.Mode))
+		cancel()
+		if err != nil {
+			return fmt.Errorf("configuring interrupt %q on pin %s: %w", ic.Name, ic.Pin, err)
+		}
+		b.interrupts[ic.Name] = &digitalInterrupt{name: ic.Name, pin: ic.Pin}
+	}
+	return nil
+}
+
+// tickDispatcher reads TICK lines from the serial connection and fans them
+// out to all active StreamTicks subscribers.
+// For non-serialConn senders (mock), it returns immediately.
+// s is captured at launch time to avoid a data race with reconfigureWithSender.
+func (b *arduinoUnoQ) tickDispatcher(s sender) {
+	sc, ok := s.(*serialConn)
+	if !ok {
+		return // mock sender — no real TICK channel
+	}
+	for {
+		select {
+		case <-b.cancelCtx.Done():
+			return
+		case line := <-sc.tickRecv:
+			b.dispatchTick(line)
+		}
+	}
+}
+
+// dispatchTick parses a "TICK <pin> <high> <micros>" line, increments the
+// matching interrupt counter, and fans the event to all StreamTicks callers.
+func (b *arduinoUnoQ) dispatchTick(line string) {
+	var pin int
+	var high int
+	var micros uint64
+	if _, err := fmt.Sscanf(line, "TICK %d %d %d", &pin, &high, &micros); err != nil {
+		b.logger.Warnw("malformed TICK", "line", line, "err", err)
+		return
+	}
+	pinStr := fmt.Sprintf("%d", pin)
+
+	// Find interrupt by pin, increment counter.
+	b.mu.Lock()
+	var matched *digitalInterrupt
+	for _, di := range b.interrupts {
+		if di.pin == pinStr {
+			di.recordTick()
+			matched = di
+			break
+		}
+	}
+	b.mu.Unlock()
+
+	if matched == nil {
+		return
+	}
+
+	tick := board.Tick{
+		Name:             matched.name,
+		High:             high != 0,
+		TimestampNanosec: micros * 1000,
+	}
+
+	b.tickSubsMu.Lock()
+	subs := make([]chan board.Tick, len(b.tickSubs))
+	copy(subs, b.tickSubs)
+	b.tickSubsMu.Unlock()
+
+	for _, sub := range subs {
+		select {
+		case sub <- tick:
+		default: // never block a slow subscriber
+		}
+	}
+}
+
+// DigitalInterruptByName looks up a configured interrupt by logical name.
 func (b *arduinoUnoQ) DigitalInterruptByName(name string) (board.DigitalInterrupt, error) {
-	return nil, fmt.Errorf("digital interrupts not supported on Arduino Uno Q")
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	di, ok := b.interrupts[name]
+	if !ok {
+		return nil, fmt.Errorf("digital interrupt %q not configured", name)
+	}
+	return di, nil
 }
 
 // GPIOPinByName returns (and lazily creates) a GPIO pin by its Arduino pin number.
@@ -239,9 +349,23 @@ func (b *arduinoUnoQ) Status(_ context.Context) (map[string]interface{}, error) 
 	return map[string]interface{}{}, nil
 }
 
-// StreamTicks is not supported in v1.
-func (b *arduinoUnoQ) StreamTicks(_ context.Context, _ []board.DigitalInterrupt, _ chan board.Tick, _ map[string]interface{}) error {
-	return fmt.Errorf("StreamTicks not supported on Arduino Uno Q")
+// StreamTicks subscribes ch to all tick events, blocking until ctx is cancelled.
+func (b *arduinoUnoQ) StreamTicks(ctx context.Context, _ []board.DigitalInterrupt, ch chan board.Tick, _ map[string]interface{}) error {
+	b.tickSubsMu.Lock()
+	b.tickSubs = append(b.tickSubs, ch)
+	b.tickSubsMu.Unlock()
+
+	<-ctx.Done()
+
+	b.tickSubsMu.Lock()
+	for i, sub := range b.tickSubs {
+		if sub == ch {
+			b.tickSubs = append(b.tickSubs[:i], b.tickSubs[i+1:]...)
+			break
+		}
+	}
+	b.tickSubsMu.Unlock()
+	return nil
 }
 
 func (b *arduinoUnoQ) Close(_ context.Context) error {
