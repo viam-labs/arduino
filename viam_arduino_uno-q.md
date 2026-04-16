@@ -180,6 +180,8 @@ The module communicates with the STM32 using a simple ASCII line protocol at 115
 | `FREQ <pin> <hz>` | `OK` | Set PWM frequency in Hz |
 | `FREQGET <pin>` | `ERR …` | Not supported |
 | `ADC <channel>` | `OK <0-4095>` | Read 12-bit ADC value |
+| `INT <pin> <mode>` | `OK` or `ERR …` | Configure hardware interrupt (RISING / FALLING / CHANGE). NONE detaches. |
+| `TICK <pin> <high> <micros>` | — (unsolicited) | Emitted on each interrupt edge. `high` is 0 or 1; `micros` is the STM32 microsecond timestamp. |
 
 ## Platform notes
 

@@ -52,7 +52,13 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if cfg.BaudRate == 0 {
 		cfg.BaudRate = 115200
 	}
-	for i := range cfg.DigitalInterrupts {
+	for i, ic := range cfg.DigitalInterrupts {
+		if ic.Name == "" {
+			return nil, nil, fmt.Errorf("%s: digital_interrupts[%d]: name is required", path, i)
+		}
+		if ic.Pin == "" {
+			return nil, nil, fmt.Errorf("%s: digital_interrupts[%d]: pin is required", path, i)
+		}
 		if cfg.DigitalInterrupts[i].Mode == "" {
 			cfg.DigitalInterrupts[i].Mode = "CHANGE"
 		}
@@ -75,7 +81,6 @@ type arduinoUnoQ struct {
 	logger logging.Logger
 	cfg    *Config
 
-	cancelCtx  context.Context
 	cancelFunc func()
 }
 
@@ -110,7 +115,6 @@ func newBoardWithSender(ctx context.Context, name resource.Name, conf *Config, s
 		interrupts: map[string]*digitalInterrupt{},
 		logger:     logger,
 		cfg:        conf,
-		cancelCtx:  cancelCtx,
 		cancelFunc: cancelFunc,
 	}
 	if err := b.hello(ctx); err != nil {
@@ -194,8 +198,11 @@ func (b *arduinoUnoQ) reconfigureWithSender(ctx context.Context, conf *Config, s
 	// Stop the existing tickDispatcher before draining/hello.
 	b.cancelFunc()
 	cancelCtx, cancelFunc := context.WithCancel(context.Background())
-	b.cancelCtx = cancelCtx
 	b.cancelFunc = cancelFunc
+
+	b.tickSubsMu.Lock()
+	b.tickSubs = nil
+	b.tickSubsMu.Unlock()
 
 	if err := b.serial.close(); err != nil {
 		b.logger.Warnw("closing serial port during reconfigure", "err", err)

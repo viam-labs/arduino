@@ -17,6 +17,17 @@ func TestConfigValidate_DigitalInterrupts(t *testing.T) {
 	}
 }
 
+func TestConfigValidate_InterruptMissingPin(t *testing.T) {
+	cfg := &Config{
+		SerialPath:        "/dev/ttyHS1",
+		DigitalInterrupts: []InterruptConfig{{Name: "enc", Pin: ""}},
+	}
+	_, _, err := cfg.Validate("test")
+	if err == nil {
+		t.Fatal("expected error for missing pin")
+	}
+}
+
 func TestConfigValidate_InterruptModeDefault(t *testing.T) {
 	cfg := &Config{
 		SerialPath: "/dev/ttyHS1",
