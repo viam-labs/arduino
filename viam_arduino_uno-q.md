@@ -58,6 +58,7 @@ The firmware uses `Serial1` (D0/D1 — the hardware UART to the Qualcomm SoC). D
 | `serial_path` | string | **Required** | — | UART device path. On the Uno Q this is `/dev/ttyHS1`. On macOS (development only) use the `/dev/cu.` prefix — the module rewrites `/dev/tty.` automatically. |
 | `baud_rate` | int | Optional | `115200` | Serial baud rate. Must match the firmware. |
 | `analogs` | array | Optional | `[]` | Analog input channels to expose by name (see below). |
+| `digital_interrupts` | array | Optional | `[]` | Digital interrupt channels to expose by name (see below). |
 
 #### `analogs` items
 
@@ -65,6 +66,14 @@ The firmware uses `Serial1` (D0/D1 — the hardware UART to the Qualcomm SoC). D
 |------|------|-------------|
 | `name` | string | Logical name used to retrieve this reader via `AnalogByName` |
 | `pin` | string | ADC channel: `"0"` through `"5"` (maps to A0–A5) |
+
+#### `digital_interrupts` items
+
+| Name | Type | Description |
+|------|------|-------------|
+| `name` | string | Logical name used to retrieve this interrupt via `DigitalInterruptByName` |
+| `pin` | string | Arduino pin number, e.g. `"2"` |
+| `mode` | string | `"RISING"`, `"FALLING"`, or `"CHANGE"` (default) |
 
 ### Minimal configuration
 
@@ -74,7 +83,7 @@ The firmware uses `Serial1` (D0/D1 — the hardware UART to the Qualcomm SoC). D
 }
 ```
 
-### Full configuration (all six analog channels)
+### Full configuration example
 
 ```json
 {
@@ -87,6 +96,10 @@ The firmware uses `Serial1` (D0/D1 — the hardware UART to the Qualcomm SoC). D
     { "name": "a3", "pin": "3" },
     { "name": "a4", "pin": "4" },
     { "name": "a5", "pin": "5" }
+  ],
+  "digital_interrupts": [
+    { "name": "encoder-a", "pin": "2", "mode": "CHANGE" },
+    { "name": "button",    "pin": "3", "mode": "RISING"  }
   ]
 }
 ```
@@ -132,13 +145,24 @@ print(reading.step_size)  # ~0.000806 V/LSB
 
 Analog write is not supported — A0–A5 are input-only pins.
 
+### Digital interrupts
+
+Pins must be declared in the `digital_interrupts` config array before use. The cumulative tick count increments on every interrupt edge since the module started.
+
+```python
+di = await board.digital_interrupt_by_name("encoder-a")
+count = await di.value()  # cumulative tick count since module start
+
+async def watch_ticks():
+    async for tick in board.stream_ticks([di], {}):
+        print(tick.name, "high=" + str(tick.high), tick.timestamp_nanosec)
+```
+
 ## Not supported in v1
 
 | Feature | Status |
 |---------|--------|
-| Digital interrupts | `DigitalInterruptByName` returns an error |
 | `SetPowerMode` | Not supported |
-| `StreamTicks` | Not supported |
 | Analog write | A0–A5 are input-only |
 | `PWM()` / `PWMFreq()` (read back) | Not supported by STM32 firmware |
 
