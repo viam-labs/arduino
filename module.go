@@ -3,6 +3,7 @@ package arduino
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
@@ -125,7 +126,7 @@ func newBoardWithSender(ctx context.Context, name resource.Name, conf *Config, s
 		cancelFunc()
 		return nil, err
 	}
-	go b.tickDispatcher(s)
+	go b.tickDispatcher(s, cancelCtx)
 	return b, nil
 }
 
@@ -213,7 +214,7 @@ func (b *arduinoUnoQ) reconfigureWithSender(ctx context.Context, conf *Config, s
 	if err := b.configureInterrupts(conf.DigitalInterrupts); err != nil {
 		return err
 	}
-	go b.tickDispatcher(s)
+	go b.tickDispatcher(b.serial, cancelCtx)
 	return nil
 }
 
@@ -250,15 +251,15 @@ func (b *arduinoUnoQ) configureInterrupts(cfgs []InterruptConfig) error {
 // tickDispatcher reads TICK lines from the serial connection and fans them
 // out to all active StreamTicks subscribers.
 // For non-serialConn senders (mock), it returns immediately.
-// s is captured at launch time to avoid a data race with reconfigureWithSender.
-func (b *arduinoUnoQ) tickDispatcher(s sender) {
+// s and ctx are captured at launch time to avoid a data race with reconfigureWithSender.
+func (b *arduinoUnoQ) tickDispatcher(s sender, ctx context.Context) {
 	sc, ok := s.(*serialConn)
 	if !ok {
 		return // mock sender — no real TICK channel
 	}
 	for {
 		select {
-		case <-b.cancelCtx.Done():
+		case <-ctx.Done():
 			return
 		case line := <-sc.tickRecv:
 			b.dispatchTick(line)
@@ -276,7 +277,7 @@ func (b *arduinoUnoQ) dispatchTick(line string) {
 		b.logger.Warnw("malformed TICK", "line", line, "err", err)
 		return
 	}
-	pinStr := fmt.Sprintf("%d", pin)
+	pinStr := strconv.Itoa(pin)
 
 	// Find interrupt by pin, increment counter.
 	b.mu.Lock()

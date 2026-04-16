@@ -38,8 +38,12 @@ func TestDigitalInterruptByName_NotFound(t *testing.T) {
 	mock := &mockSender{}
 	mock.queue("OK UNO-Q v1", nil)
 	conf := &Config{SerialPath: "/dev/ttyHS1"}
-	b, _ := newBoardWithSender(context.Background(), board.Named("test"), conf, mock, logging.NewTestLogger(t))
-	_, err := b.DigitalInterruptByName("missing")
+	b, err := newBoardWithSender(context.Background(), board.Named("test"), conf, mock, logging.NewTestLogger(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close(context.Background())
+	_, err = b.DigitalInterruptByName("missing")
 	if err == nil {
 		t.Fatal("expected error for unconfigured interrupt")
 	}
