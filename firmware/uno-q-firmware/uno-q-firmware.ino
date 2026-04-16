@@ -13,6 +13,31 @@
 
 #define FIRMWARE_VERSION "UNO-Q v1"
 
+// ---- Digital interrupt support ----
+#define MAX_INT_SLOTS 8
+
+struct IntSlot {
+    int  pin;
+    bool active;
+    volatile bool triggered;
+    volatile bool lastHigh;
+};
+
+static IntSlot intSlots[MAX_INT_SLOTS];
+
+#define MAKE_ISR(N) \
+static void isr##N() { \
+    if (intSlots[N].active) { \
+        intSlots[N].triggered = true; \
+        intSlots[N].lastHigh = (bool)digitalRead(intSlots[N].pin); \
+    } \
+}
+MAKE_ISR(0) MAKE_ISR(1) MAKE_ISR(2) MAKE_ISR(3)
+MAKE_ISR(4) MAKE_ISR(5) MAKE_ISR(6) MAKE_ISR(7)
+
+static void (*isrTable[MAX_INT_SLOTS])() =
+    {isr0, isr1, isr2, isr3, isr4, isr5, isr6, isr7};
+
 // PWM-capable pins (mapped to STM32 timers)
 // 3(TIM2), 5(TIM2), 6(TIM3), 9(TIM1), 10(TIM1), 11(TIM1)
 const int PWM_PINS[] = {3, 5, 6, 9, 10, 11};
@@ -26,6 +51,18 @@ void setup() {
 }
 
 void loop() {
+  // Poll interrupt slots and emit TICK notifications.
+  for (int i = 0; i < MAX_INT_SLOTS; i++) {
+    if (intSlots[i].active && intSlots[i].triggered) {
+      intSlots[i].triggered = false;
+      Serial1.println(
+        "TICK " + String(intSlots[i].pin) +
+        " " + String(intSlots[i].lastHigh ? 1 : 0) +
+        " " + String(micros())
+      );
+    }
+  }
+
   if (Serial1.available()) {
     String cmd = Serial1.readStringUntil('\n');
     cmd.trim();
@@ -91,6 +128,44 @@ void handleCommand(const String& cmd) {
     if (channel < 0 || channel > 5) { Serial1.println("ERR invalid ADC channel"); return; }
     int val = analogRead(A0 + channel);
     Serial1.println("OK " + String(val));
+
+  } else if (op == "INT") {
+    int sp = rest.indexOf(' ');
+    int pin = rest.substring(0, sp).toInt();
+    String mode = rest.substring(sp + 1);
+    mode.trim();
+
+    // Detach any existing slot for this pin.
+    for (int i = 0; i < MAX_INT_SLOTS; i++) {
+      if (intSlots[i].active && intSlots[i].pin == pin) {
+        detachInterrupt(digitalPinToInterrupt(pin));
+        intSlots[i].active = false;
+        break;
+      }
+    }
+
+    if (mode == "NONE") {
+      Serial1.println("OK");
+      return;
+    }
+
+    // Find a free slot.
+    int slot = -1;
+    for (int i = 0; i < MAX_INT_SLOTS; i++) {
+      if (!intSlots[i].active) { slot = i; break; }
+    }
+    if (slot < 0) {
+      Serial1.println("ERR no interrupt slots");
+      return;
+    }
+
+    int imode = CHANGE;
+    if (mode == "RISING")  imode = RISING;
+    if (mode == "FALLING") imode = FALLING;
+
+    intSlots[slot] = { pin, true, false, (bool)digitalRead(pin) };
+    attachInterrupt(digitalPinToInterrupt(pin), isrTable[slot], imode);
+    Serial1.println("OK");
 
   } else {
     Serial1.println("ERR unknown command: " + op);
