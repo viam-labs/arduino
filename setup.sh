@@ -141,6 +141,13 @@ log "Stopping and disabling arduino-router (module will own /dev/ttyHS1 directly
 systemctl stop    arduino-router 2>/dev/null || true
 systemctl disable arduino-router 2>/dev/null || true
 
+# The router's ExecStopPost toggles GPIO 38, which resets the STM32.
+# Zephyr needs several seconds to boot before Serial1 is ready to receive
+# commands. Without this sleep the module starts immediately after setup
+# and all HELLO attempts during the boot window are silently discarded.
+log "Waiting for STM32 to complete boot sequence..."
+sleep 15
+
 log "Setup complete."
 log "The viam:arduino module will pulse GPIO 37 to wake the STM32 on each"
 log "connect and communicate directly over /dev/ttyHS1 at 115200 baud."

@@ -35,7 +35,7 @@ static void isr##N() { \
 MAKE_ISR(0) MAKE_ISR(1) MAKE_ISR(2) MAKE_ISR(3)
 MAKE_ISR(4) MAKE_ISR(5) MAKE_ISR(6) MAKE_ISR(7)
 
-static void (*isrTable[MAX_INT_SLOTS])() =
+static voidFuncPtr isrTable[MAX_INT_SLOTS] =
     {isr0, isr1, isr2, isr3, isr4, isr5, isr6, isr7};
 
 // PWM-capable pins (mapped to STM32 timers)
@@ -159,7 +159,7 @@ void handleCommand(const String& cmd) {
       return;
     }
 
-    int imode = CHANGE;
+    PinStatus imode = CHANGE;
     if (mode == "RISING")  imode = RISING;
     if (mode == "FALLING") imode = FALLING;
 

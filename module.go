@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -245,10 +246,13 @@ func (b *arduinoUnoQ) AnalogByName(name string) (board.Analog, error) {
 func (b *arduinoUnoQ) configureInterrupts(cfgs []InterruptConfig) error {
 	for _, ic := range cfgs {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_, err := b.serial.send(ctx, fmt.Sprintf("INT %s %s", ic.Pin, ic.Mode))
+		resp, err := b.serial.send(ctx, fmt.Sprintf("INT %s %s", ic.Pin, ic.Mode))
 		cancel()
 		if err != nil {
 			return fmt.Errorf("configuring interrupt %q on pin %s: %w", ic.Name, ic.Pin, err)
+		}
+		if strings.HasPrefix(resp, "ERR") {
+			return fmt.Errorf("configuring interrupt %q on pin %s: firmware error: %s", ic.Name, ic.Pin, resp)
 		}
 		b.interrupts[ic.Name] = &digitalInterrupt{name: ic.Name, pin: ic.Pin}
 	}
@@ -363,16 +367,21 @@ func (b *arduinoUnoQ) StreamTicks(ctx context.Context, _ []board.DigitalInterrup
 	b.tickSubs = append(b.tickSubs, ch)
 	b.tickSubsMu.Unlock()
 
-	<-ctx.Done()
-
-	b.tickSubsMu.Lock()
-	for i, sub := range b.tickSubs {
-		if sub == ch {
-			b.tickSubs = append(b.tickSubs[:i], b.tickSubs[i+1:]...)
-			break
+	// Return immediately — the gRPC server sends its first "ready" response
+	// after this returns. Clean up the subscriber in a background goroutine
+	// when the caller's context is cancelled.
+	go func() {
+		<-ctx.Done()
+		b.tickSubsMu.Lock()
+		for i, sub := range b.tickSubs {
+			if sub == ch {
+				b.tickSubs = append(b.tickSubs[:i], b.tickSubs[i+1:]...)
+				break
+			}
 		}
-	}
-	b.tickSubsMu.Unlock()
+		b.tickSubsMu.Unlock()
+	}()
+
 	return nil
 }
 
