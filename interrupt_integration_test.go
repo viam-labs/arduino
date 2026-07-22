@@ -12,7 +12,7 @@ import (
 func TestDigitalInterruptByName_Found(t *testing.T) {
 	mock := &mockSender{}
 	mock.queue("OK UNO-Q v1", nil) // HELLO
-	mock.queue("OK", nil)           // INT 2 CHANGE
+	mock.queue("OK", nil)          // INT 2 CHANGE
 
 	conf := &Config{
 		SerialPath: "/dev/ttyHS1",
