@@ -2,9 +2,9 @@ package main
 
 import (
 	"arduino"
+	board "go.viam.com/rdk/components/board"
 	"go.viam.com/rdk/module"
 	"go.viam.com/rdk/resource"
-	board "go.viam.com/rdk/components/board"
 )
 
 func main() {
