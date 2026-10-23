@@ -28,7 +28,7 @@ func main() {
 		logger.Fatal(err)
 	}
 
-	defer machine.Close(context.Background())
+	defer func() { _ = machine.Close(context.Background()) }()
 	logger.Info("Resources:")
 	logger.Info(machine.ResourceNames())
 
@@ -38,5 +38,7 @@ func main() {
 		logger.Error(err)
 		return
 	}
-	ultrasonic.Readings(context.Background(), nil)
+	if _, err := ultrasonic.Readings(context.Background(), nil); err != nil {
+		logger.Error(err)
+	}
 }
