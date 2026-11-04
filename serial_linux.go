@@ -47,12 +47,12 @@ func openSerialLinux(path string, baud int) (*serialConn, error) {
 	}
 
 	if err := clearNonblock(fd); err != nil {
-		syscall.Close(fd)
+		_ = syscall.Close(fd)
 		return nil, fmt.Errorf("clearing O_NONBLOCK on %s: %w", path, err)
 	}
 
 	if err := configureTermios(fd, baud); err != nil {
-		syscall.Close(fd)
+		_ = syscall.Close(fd)
 		return nil, fmt.Errorf("configuring termios on %s: %w", path, err)
 	}
 

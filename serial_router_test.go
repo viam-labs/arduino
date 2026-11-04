@@ -27,7 +27,7 @@ func (f *fakePipe) closeRW() error              { return nil }
 func TestReadLine_RoutesCommandResponse(t *testing.T) {
 	pipe := &fakePipe{data: make(chan []byte, 8)}
 	conn := newSerialConn(pipe)
-	defer conn.close()
+	defer func() { _ = conn.close() }()
 
 	pipe.data <- []byte("OK 1\r\n")
 
@@ -45,7 +45,7 @@ func TestReadLine_RoutesCommandResponse(t *testing.T) {
 func TestReadLoop_RoutesTick(t *testing.T) {
 	pipe := &fakePipe{data: make(chan []byte, 8)}
 	conn := newSerialConn(pipe)
-	defer conn.close()
+	defer func() { _ = conn.close() }()
 
 	pipe.data <- []byte("TICK 2 1 123456\r\n")
 
@@ -62,7 +62,7 @@ func TestReadLoop_RoutesTick(t *testing.T) {
 func TestDrain_ClearsTickRecv(t *testing.T) {
 	pipe := &fakePipe{data: make(chan []byte, 8)}
 	conn := newSerialConn(pipe)
-	defer conn.close()
+	defer func() { _ = conn.close() }()
 
 	pipe.data <- []byte("TICK 2 1 99999\r\n")
 	time.Sleep(50 * time.Millisecond) // let readLoop process
@@ -78,7 +78,7 @@ func TestDrain_ClearsTickRecv(t *testing.T) {
 func TestDrain_ClearsCommandRecv(t *testing.T) {
 	pipe := &fakePipe{data: make(chan []byte, 8)}
 	conn := newSerialConn(pipe)
-	defer conn.close()
+	defer func() { _ = conn.close() }()
 
 	pipe.data <- []byte("OK UNO-Q v1\r\n")
 	time.Sleep(50 * time.Millisecond) // let readLoop process
