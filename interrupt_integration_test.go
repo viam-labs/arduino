@@ -42,7 +42,7 @@ func TestDigitalInterruptByName_NotFound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer b.Close(context.Background())
+	defer func() { _ = b.Close(context.Background()) }()
 	_, err = b.DigitalInterruptByName("missing")
 	if err == nil {
 		t.Fatal("expected error for unconfigured interrupt")
