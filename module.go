@@ -119,7 +119,7 @@ func newBoardWithSender(ctx context.Context, name resource.Name, conf *Config, s
 		cancelFunc: cancelFunc,
 	}
 	if err := b.hello(ctx); err != nil {
-		s.close()
+		_ = s.close()
 		cancelFunc()
 		return nil, err
 	}
@@ -127,7 +127,7 @@ func newBoardWithSender(ctx context.Context, name resource.Name, conf *Config, s
 		b.analogs[ar.Name] = &analogPin{channel: ar.Pin, serial: b.serial}
 	}
 	if err := b.configureInterrupts(conf.DigitalInterrupts); err != nil {
-		s.close()
+		_ = s.close()
 		cancelFunc()
 		return nil, err
 	}

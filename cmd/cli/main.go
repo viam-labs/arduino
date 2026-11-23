@@ -37,7 +37,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("connect: %v", err)
 	}
-	defer b.Close(ctx)
+	defer func() { _ = b.Close(ctx) }()
 
 	log.Printf("connected to Arduino Uno Q on %s", *serial)
 

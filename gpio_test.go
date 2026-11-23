@@ -12,9 +12,7 @@ func newTestBoard(t *testing.T, responses ...mockResponse) (*arduinoUnoQ, *mockS
 	t.Helper()
 	mock := &mockSender{}
 	mock.queue("OK UNO-Q v1", nil) // HELLO
-	for _, r := range responses {
-		mock.responses = append(mock.responses, r)
-	}
+	mock.responses = append(mock.responses, responses...)
 	conf := &Config{SerialPath: "/dev/ttyUSB0", BaudRate: 115200}
 	b, err := newBoardWithSender(context.Background(), board.Named("test-board"), conf, mock, logging.NewTestLogger(t))
 	if err != nil {
